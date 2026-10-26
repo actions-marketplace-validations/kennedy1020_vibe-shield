@@ -42,5 +42,9 @@
     "@vercel/ncc": "^0.38.1",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kennedy1020/vibe-shield.git"
   }
 }
