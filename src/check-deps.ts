@@ -1,62 +1,58 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-interface Manifest {
-  dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-}
+/**
+ * Checks an object of package dependencies against the npm registry.
+ * Returns an array of package names that return 404 (hallucinated / slopsquatted).
+ */
+export async function auditDependencies(
+  deps: Record<string, string>
+): Promise<string[]> {
+  const missing: string[] = [];
+  const packageNames = Object.keys(deps || {});
 
-export async function verifyDependencies(targetDir: string): Promise<string[]> {
-  const pkgPath = path.join(targetDir, 'package.json');
-  if (!fs.existsSync(pkgPath)) {
-    return [];
-  }
-
-  let pkg: Manifest;
-  try {
-    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-  } catch (err) {
-    throw new Error(`Failed to parse ${pkgPath}: ${(err as Error).message}`);
-  }
-
-  const combined = {
-    ...pkg.dependencies,
-    ...pkg.devDependencies
-  };
-
-  const candidatePackages = Object.keys(combined).filter((dep) => {
-    // Exclude scoped TypeScript definitions, relative paths, and workspace aliases
-    return (
-      !dep.startsWith('@types/') &&
-      !dep.startsWith('.') &&
-      !dep.startsWith('workspace:') &&
-      !dep.startsWith('file:')
-    );
-  });
-
-  const hallucinated: string[] = [];
-
-  // Concurrently inspect npm registry for package existence
   await Promise.all(
-    candidatePackages.map(async (dep) => {
+    packageNames.map(async (pkg) => {
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 4000);
+        const encodedPkg = pkg.startsWith('@')
+          ? `@${encodeURIComponent(pkg.slice(1))}`
+          : encodeURIComponent(pkg);
 
-        const res = await fetch(`https://registry.npmjs.org/${encodeURIComponent(dep)}`, {
-          method: 'HEAD',
-          signal: controller.signal
+        const res = await fetch(`https://registry.npmjs.org/${encodedPkg}`, {
+          method: 'HEAD'
         });
-        clearTimeout(timeout);
 
         if (res.status === 404) {
-          hallucinated.push(dep);
+          missing.push(pkg);
         }
       } catch {
-        // Network timeout / offline fallback: do not trigger false positive on connectivity issues
+        // Network timeout / DNS errors don't count as 404s
       }
     })
   );
 
-  return hallucinated;
+  return missing;
+}
+
+/**
+ * Reads package.json in targetDir and audits all dependencies.
+ */
+export async function verifyDependencies(targetDir: string): Promise<string[]> {
+  const pkgPath = path.resolve(targetDir, 'package.json');
+  if (!fs.existsSync(pkgPath)) {
+    return [];
+  }
+
+  try {
+    const raw = fs.readFileSync(pkgPath, 'utf8');
+    const pkg = JSON.parse(raw);
+    const allDeps: Record<string, string> = {
+      ...pkg.dependencies,
+      ...pkg.devDependencies
+    };
+
+    return await auditDependencies(allDeps);
+  } catch {
+    return [];
+  }
 }

@@ -11,7 +11,7 @@ const __dirname = path.dirname(__filename);
 async function run() {
     try {
         const token = core.getInput('github-token');
-        const targetDir = core.getInput('target-dir');
+        const targetDir = core.getInput('target-dir') || '.';
         const octokit = github.getOctokit(token);
         const context = github.context;
         core.info(`Running vibe-shield against target: ${targetDir}`);
@@ -26,7 +26,7 @@ async function run() {
         const rulesPath = path.resolve(__dirname, '../rules/nextjs-stack.yml');
         let stdout = '';
         try {
-            const res = await execAsync(`semgrep scan --config "${rulesPath}"--no-git-ignore --json "${targetDir}"`);
+            const res = await execAsync(`semgrep scan --config "${rulesPath}" --no-git-ignore --json "${targetDir}"`);
             stdout = res.stdout;
         }
         catch (err) {

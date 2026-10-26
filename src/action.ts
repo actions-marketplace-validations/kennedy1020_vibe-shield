@@ -29,7 +29,7 @@ interface SemgrepReport {
 async function run(): Promise<void> {
   try {
     const token = core.getInput('github-token');
-    const targetDir = core.getInput('target-dir');
+    const targetDir = core.getInput('target-dir') || '.';
     const octokit = github.getOctokit(token);
     const context = github.context;
 
@@ -47,7 +47,9 @@ async function run(): Promise<void> {
     const rulesPath = path.resolve(__dirname, '../rules/nextjs-stack.yml');
     let stdout = '';
     try {
-      const res = await execAsync(`semgrep scan --config "${rulesPath}"--no-git-ignore --json "${targetDir}"`);
+      const res = await execAsync(
+        `semgrep scan --config "${rulesPath}" --no-git-ignore --json "${targetDir}"`
+      );
       stdout = res.stdout;
     } catch (err: unknown) {
       // Semgrep returns exit status 1 when findings exist

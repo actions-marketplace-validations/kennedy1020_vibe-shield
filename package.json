@@ -1,16 +1,37 @@
 {
-  "name": "vibe-shield",
-  "version": "0.1.0",
+  "name": "@kennedy1020/vibe-shield",
+  "version": "1.0.1",
+  "description": "Zero-config security analysis and slopsquatting detection for Next.js, Prisma, and Stripe stacks.",
   "type": "module",
+  "main": "./dist/index.js",
   "bin": {
     "vibe-shield": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "rules",
+    "action.yml",
+    "README.md"
+  ],
   "scripts": {
     "build:cli": "tsc",
     "build:action": "ncc build dist/action.js -o dist --minify --license licenses.txt",
     "build": "npm run build:cli && npm run build:action",
+    "prepublishOnly": "npm run build",
     "test:local": "tsx src/cli.ts scan test/fixtures"
   },
+  "keywords": [
+    "security",
+    "nextjs",
+    "prisma",
+    "stripe",
+    "semgrep",
+    "idor",
+    "cli",
+    "actions"
+  ],
+  "author": "Kennedy Adongo",
+  "license": "MIT",
   "dependencies": {
     "@actions/core": "^1.11.1",
     "@actions/github": "^6.0.0",
