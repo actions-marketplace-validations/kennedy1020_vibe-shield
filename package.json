@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "vibe-shield": "./dist/cli.js"
+    "vibe-shield": "dist/cli.js"
   },
   "files": [
     "dist",
