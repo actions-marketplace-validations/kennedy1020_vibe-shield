@@ -1,0 +1,17 @@
+name: 'vibe-shield'
+description: 'Zero-config security analysis for Next.js, Prisma, and Stripe apps'
+author: 'vibe-shield'
+
+inputs:
+  github-token:
+    description: 'GitHub token for posting review comments'
+    required: false
+    default: ${{ github.token }}
+  target-dir:
+    description: 'Subdirectory to scan'
+    required: false
+    default: '.'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

@@ -1,0 +1,25 @@
+{
+  "name": "vibe-shield",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "vibe-shield": "./dist/cli.js"
+  },
+  "scripts": {
+    "build:cli": "tsc",
+    "build:action": "ncc build dist/action.js -o dist --minify --license licenses.txt",
+    "build": "npm run build:cli && npm run build:action",
+    "test:local": "tsx src/cli.ts scan test/fixtures"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.0",
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@vercel/ncc": "^0.38.1",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

@@ -1,0 +1,76 @@
+rules:
+  # 1. Unscoped Database Mutation / Read (IDOR)
+  - id: nextjs-prisma-unscoped-mutation
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: |
+      BOLA/IDOR Flaw: Modifying database records by 'id' alone.
+      Queries must scope by tenant/user context (e.g., where: { id, organizationId }).
+    patterns:
+      - pattern-either:
+          - pattern: '$PRISMA.$MODEL.update({ where: { id: $ID }, ... })'
+          - pattern: '$PRISMA.$MODEL.delete({ where: { id: $ID }, ... })'
+      - pattern-not: '$PRISMA.$MODEL.update({ where: { id: $ID, organizationId: $ORG, ... }, ... })'
+      - pattern-not: '$PRISMA.$MODEL.update({ where: { id: $ID, userId: $USER, ... }, ... })'
+      - pattern-not: '$PRISMA.$MODEL.delete({ where: { id: $ID, organizationId: $ORG, ... }, ... })'
+      - pattern-not: '$PRISMA.$MODEL.delete({ where: { id: $ID, userId: $USER, ... }, ... })'
+
+  # 2. Insecure Stripe Webhook (Parsed JSON without HMAC check)
+  - id: nextjs-stripe-unsigned-webhook
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: |
+      Unverified Webhook: Directly parsing req.json() bypasses HMAC validation.
+      Stripe webhooks require raw text (req.text()) verified via stripe.webhooks.constructEvent().
+    patterns:
+      - pattern-inside: |
+          export async function POST(req: $REQ) {
+            ...
+          }
+      - pattern: 'const $BODY = await req.json();'
+      - pattern-not-inside: 'stripe.webhooks.constructEvent(...)'
+
+  # 3. Client-Side Secret Bleed (Fixed: Captures full AST identifier node)
+  - id: nextjs-public-secret-bleed
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: |
+      Secret Exposure: Backend secrets mapped to NEXT_PUBLIC_* variables
+      leak into the client-side JavaScript bundle.
+    patterns:
+      - pattern: 'process.env.$KEY'
+      - metavariable-regex:
+          metavariable: '$KEY'
+          regex: '^NEXT_PUBLIC_.*(STRIPE_SECRET|SECRET|SERVICE_ROLE|PRIVATE_KEY|DATABASE_URL)'
+
+  # 4. Unprotected Server Action (Fixed: Handles chained Prisma calls)
+  - id: nextjs-unprotected-server-action
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: |
+      Public RPC Exposure: Server Action performs database mutations without
+      session validation at the top of the function.
+    patterns:
+      - pattern-inside: |
+          'use server';
+          ...
+      - pattern-either:
+          - pattern: |
+              export async function $ACTION($PARAMS) {
+                ...
+                await $PRISMA.$MODEL.$METHOD(...);
+                ...
+              }
+          - pattern: |
+              export async function $ACTION($PARAMS) {
+                ...
+                await $DB.$METHOD(...);
+                ...
+              }
+      - pattern-not: |
+          export async function $ACTION($PARAMS) {
+            ...
+            const $SESSION = await $AUTH(...);
+            if (!$SESSION) { ... }
+            ...
+          }
