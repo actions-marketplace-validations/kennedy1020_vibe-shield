@@ -1,6 +1,6 @@
 {
   "name": "@kennedy1020/vibe-shield",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Zero-config security analysis and slopsquatting detection for Next.js, Prisma, and Stripe stacks.",
   "type": "module",
   "main": "./dist/index.js",
