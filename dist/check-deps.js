@@ -13,7 +13,7 @@ export async function auditDependencies(deps) {
                 ? `@${encodeURIComponent(pkg.slice(1))}`
                 : encodeURIComponent(pkg);
             const res = await fetch(`https://registry.npmjs.org/${encodedPkg}`, {
-                method: 'HEAD'
+                method: 'HEAD',
             });
             if (res.status === 404) {
                 missing.push(pkg);
@@ -38,7 +38,7 @@ export async function verifyDependencies(targetDir) {
         const pkg = JSON.parse(raw);
         const allDeps = {
             ...pkg.dependencies,
-            ...pkg.devDependencies
+            ...pkg.devDependencies,
         };
         return await auditDependencies(allDeps);
     }

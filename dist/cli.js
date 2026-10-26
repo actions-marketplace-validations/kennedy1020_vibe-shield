@@ -1,13 +1,16 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 import { Command } from 'commander';
-import { spawn, execSync } from 'child_process';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import fs from 'fs';
-import { auditDependencies } from './check-deps.js';
+import { verifyDependencies } from './check-deps.js';
+import { mergeFindingsToSarif } from './sarif.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-function checkSemgrepInstalled() {
+const program = new Command();
+// ... rest of src/cli.ts remains identical
+function isSemgrepInstalled() {
     try {
         execSync('semgrep --version', { stdio: 'ignore' });
         return true;
@@ -16,63 +19,99 @@ function checkSemgrepInstalled() {
         return false;
     }
 }
-const program = new Command();
+function printSemgrepMissingMessage() {
+    console.error('\n❌ Error: Semgrep CLI is not installed or not found on PATH.');
+    console.error('vibe-shield requires Semgrep to perform AST security analysis.\n');
+    console.error('Install Semgrep for your platform:');
+    console.error('  • macOS (Homebrew): brew install semgrep');
+    console.error('  • Linux / WSL:      pip install semgrep');
+    console.error('  • Windows:          python -m pip install semgrep\n');
+}
 program
     .name('vibe-shield')
-    .description('Static analysis security scanner and slopsquatting detector for Next.js stacks')
-    .version('1.0.1');
+    .description('Zero-config security auditor and slopsquatting detector for Next.js, Prisma, and Stripe stacks')
+    .version('1.0.2');
 program
     .command('scan [target]')
-    .description('Audit target directory for package hallucinations and code vulnerabilities')
-    .action(async (target = '.') => {
+    .description('Audit target directory for slopsquatting and AST security flaws')
+    .option('-f, --format <type>', 'Output format: text | sarif', 'text')
+    .option('-o, --output <file>', 'Path to write report (default: stdout for text, vibe-shield.sarif for sarif)')
+    .action(async (target = '.', options) => {
     const targetDir = path.resolve(process.cwd(), target);
-    console.log(`\n🛡️  vibe-shield: Auditing ${targetDir}\n`);
-    // Pre-flight check: Verify Semgrep presence before starting the audit
-    if (!checkSemgrepInstalled()) {
-        console.error('❌ vibe-shield requires Semgrep CLI for AST pattern analysis.\n');
-        console.error('Install it via your package manager:');
-        console.error('  • macOS:   brew install semgrep');
-        console.error('  • Windows: python -m pip install semgrep');
-        console.error('  • Linux:   pip install semgrep\n');
+    const isSarif = options.format.toLowerCase() === 'sarif';
+    // 1. Verify target directory exists
+    if (!fs.existsSync(targetDir)) {
+        console.error(`\n❌ Error: Target path does not exist: ${targetDir}`);
         process.exit(1);
     }
-    // 1. Dependency Slopsquatting Audit
-    const pkgPath = path.join(targetDir, 'package.json');
-    if (fs.existsSync(pkgPath)) {
+    // 2. Pre-flight Check: Ensure Semgrep is accessible
+    if (!isSemgrepInstalled()) {
+        printSemgrepMissingMessage();
+        process.exit(1);
+    }
+    if (!isSarif) {
+        console.log(`\n🛡️  vibe-shield: Auditing ${targetDir}`);
         console.log('🔍 Auditing dependencies for AI package hallucinations (slopsquatting)...');
-        try {
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-            const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-            const missing = await auditDependencies(deps);
-            if (missing.length > 0) {
-                console.error('\n❌ CRITICAL: Unregistered / Hallucinated Dependencies Detected:');
-                missing.forEach((pkgName) => console.error(`   - ${pkgName} (404 on npm registry)`));
-                console.error('\nAborting scan. Verify dependencies before running AST analysis.\n');
-                process.exit(1);
-            }
-            console.log('✅ Dependencies verified against public registry.\n');
-        }
-        catch (err) {
-            const error = err;
-            console.warn(`⚠️  Dependency verification skipped: Failed to parse ${pkgPath}: ${error.message}\n`);
+    }
+    // 3. Stage 1: Dependency Slopsquatting Audit
+    let hallucinated = [];
+    try {
+        hallucinated = await verifyDependencies(targetDir);
+    }
+    catch (err) {
+        if (!isSarif) {
+            console.warn(`⚠️  Warning: Could not audit package.json dependencies: ${err.message}`);
         }
     }
-    // 2. Semgrep Static Analysis
-    const rulesPath = path.resolve(__dirname, '../rules/nextjs-stack.yml');
-    console.log(`🚀 Executing AST pattern analysis using rules: ${rulesPath}\n`);
-    const semgrep = spawn('semgrep', ['scan', '--config', rulesPath, '--error', targetDir], { stdio: 'inherit' });
-    semgrep.on('close', (code) => {
-        if (code === 0) {
-            console.log('\n✨ Audit clean: Zero high-severity anti-patterns detected.\n');
-        }
-        else {
-            console.log('\n🚨 vibe-shield detected security violations requiring resolution.\n');
-        }
-        process.exit(code ?? 0);
-    });
-    semgrep.on('error', (err) => {
-        console.error(`\n❌ Execution error: ${err.message}\n`);
+    if (!isSarif && hallucinated.length > 0) {
+        console.error('\n❌ CRITICAL: Unregistered / Hallucinated Dependencies Detected:');
+        hallucinated.forEach((pkg) => console.error(`   - ${pkg} (404 on npm registry)`));
+        console.error('\nAborting scan. Verify dependencies before proceeding.');
         process.exit(1);
-    });
+    }
+    if (!isSarif) {
+        console.log('✅ Dependencies verified against public registry.');
+        console.log('🚀 Executing AST pattern analysis...');
+    }
+    // 4. Stage 2: Semgrep AST Rule Engine
+    const ruleFile = path.resolve(__dirname, '../rules/nextjs-stack.yml');
+    if (!fs.existsSync(ruleFile)) {
+        console.error(`\n❌ Error: Ruleset not found at ${ruleFile}`);
+        process.exit(1);
+    }
+    let semgrepOutput = '';
+    let semgrepExitCode = 0;
+    const semgrepArgs = isSarif
+        ? `semgrep --config "${ruleFile}" --sarif "${targetDir}"`
+        : `semgrep --config "${ruleFile}" "${targetDir}"`;
+    try {
+        semgrepOutput = execSync(semgrepArgs, {
+            encoding: 'utf-8',
+            stdio: isSarif ? ['pipe', 'pipe', 'pipe'] : 'inherit',
+        });
+    }
+    catch (err) {
+        semgrepExitCode = err.status ?? 1;
+        semgrepOutput = err.stdout?.toString() || '';
+    }
+    // 5. Stage 3: Emit Formatted Results
+    if (isSarif) {
+        const mergedSarif = mergeFindingsToSarif(semgrepOutput, hallucinated, targetDir);
+        const sarifJson = JSON.stringify(mergedSarif, null, 2);
+        const outputFile = options.output || 'vibe-shield.sarif';
+        const outputPath = path.resolve(process.cwd(), outputFile);
+        fs.writeFileSync(outputPath, sarifJson, 'utf-8');
+        console.log(`🛡️  vibe-shield: SARIF report written to ${outputFile}`);
+        const totalFindings = mergedSarif.runs[0]?.results?.length || 0;
+        process.exit(totalFindings > 0 ? 1 : 0);
+    }
+    else {
+        if (semgrepExitCode !== 0) {
+            console.error('\n🚨 vibe-shield detected security violations requiring resolution.\n');
+            process.exit(semgrepExitCode);
+        }
+        console.log('\n✨ No security violations or slopsquatted packages detected.\n');
+        process.exit(0);
+    }
 });
 program.parse(process.argv);

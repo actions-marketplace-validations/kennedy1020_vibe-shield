@@ -1,83 +1,139 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 import { verifyDependencies } from './check-deps.js';
-const execAsync = promisify(exec);
+import { mergeFindingsToSarif } from './sarif.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+async function postOrUpdatePrComment(token, commentBody) {
+    const context = github.context;
+    if (!context.payload.pull_request) {
+        core.info('Not a pull request; skipping PR comment.');
+        return;
+    }
+    const octokit = github.getOctokit(token);
+    const prNumber = context.payload.pull_request.number;
+    const { owner, repo } = context.repo;
+    const headerMarker = '<!-- vibe-shield-scan-summary -->';
+    const fullBody = `${headerMarker}\n${commentBody}`;
+    try {
+        const { data: comments } = await octokit.rest.issues.listComments({
+            owner,
+            repo,
+            issue_number: prNumber,
+        });
+        const existingComment = comments.find((c) => c.body?.includes(headerMarker));
+        if (existingComment) {
+            await octokit.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existingComment.id,
+                body: fullBody,
+            });
+            core.info(`Updated existing vibe-shield comment on PR #${prNumber}`);
+        }
+        else {
+            await octokit.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body: fullBody,
+            });
+            core.info(`Created vibe-shield comment on PR #${prNumber}`);
+        }
+    }
+    catch (err) {
+        core.warning(`Failed to post/update PR comment: ${err.message}`);
+    }
+}
 async function run() {
     try {
+        const targetDir = path.resolve(process.cwd(), core.getInput('target-dir') || '.');
         const token = core.getInput('github-token');
-        const targetDir = core.getInput('target-dir') || '.';
-        const octokit = github.getOctokit(token);
-        const context = github.context;
-        core.info(`Running vibe-shield against target: ${targetDir}`);
-        // 1. Dependency Hallucination Check
-        const phantomDeps = await verifyDependencies(targetDir);
-        if (phantomDeps.length > 0) {
-            const depMsg = `Supply-chain risk: Unregistered packages detected: ${phantomDeps.join(', ')}`;
-            core.setFailed(depMsg);
-            return;
+        const generateSarif = core.getBooleanInput('sarif');
+        const sarifOutputFilename = 'vibe-shield.sarif';
+        core.info(`🛡️ Starting vibe-shield scan on ${targetDir}`);
+        // 1. Dependency Slopsquatting Audit
+        core.info('🔍 Auditing dependencies for hallucinated packages...');
+        const hallucinated = await verifyDependencies(targetDir);
+        // 2. Semgrep AST Engine Analysis
+        const ruleFile = path.resolve(__dirname, '../rules/nextjs-stack.yml');
+        if (!fs.existsSync(ruleFile)) {
+            throw new Error(`Ruleset not found at path: ${ruleFile}`);
         }
-        // 2. Semgrep JSON Execution
-        const rulesPath = path.resolve(__dirname, '../rules/nextjs-stack.yml');
-        let stdout = '';
+        let semgrepOutput = '';
+        let semgrepExitCode = 0;
+        // Run Semgrep with --sarif output mode
+        const semgrepCmd = `semgrep --config "${ruleFile}" --sarif "${targetDir}"`;
         try {
-            const res = await execAsync(`semgrep scan --config "${rulesPath}" --no-git-ignore --json "${targetDir}"`);
-            stdout = res.stdout;
+            semgrepOutput = execSync(semgrepCmd, {
+                encoding: 'utf-8',
+                stdio: ['pipe', 'pipe', 'pipe'],
+            });
         }
         catch (err) {
-            // Semgrep returns exit status 1 when findings exist
-            const execError = err;
-            stdout = execError.stdout || '';
+            semgrepExitCode = err.status ?? 1;
+            semgrepOutput = err.stdout?.toString() || '';
         }
-        let report;
-        try {
-            report = JSON.parse(stdout || '{"results":[]}');
+        // 3. Merge Semgrep AST results with slopsquatted dependencies
+        const mergedSarif = mergeFindingsToSarif(semgrepOutput, hallucinated, targetDir);
+        const results = mergedSarif.runs[0]?.results || [];
+        const totalViolations = results.length;
+        // 4. Emit SARIF artifact if requested
+        if (generateSarif) {
+            const sarifPath = path.resolve(process.cwd(), sarifOutputFilename);
+            fs.writeFileSync(sarifPath, JSON.stringify(mergedSarif, null, 2), 'utf-8');
+            core.setOutput('sarif-file', sarifPath);
+            core.info(`📄 SARIF report generated at ${sarifPath}`);
         }
-        catch {
-            core.setFailed(`Failed to parse Semgrep JSON output: ${stdout}`);
-            return;
+        // 5. Construct Markdown Summary Table
+        let summaryMarkdown = `## 🛡️ vibe-shield Security Audit\n\n`;
+        if (totalViolations === 0) {
+            summaryMarkdown += `✅ **All checks passed.** No slopsquatted packages or AST vulnerabilities detected.\n`;
         }
-        const matches = report.results || [];
-        if (matches.length === 0) {
-            core.info('✅ vibe-shield: No vulnerabilities detected.');
-            return;
+        else {
+            summaryMarkdown += `🚨 **Detected ${totalViolations} security issue(s) requiring attention:**\n\n`;
+            summaryMarkdown += `| Severity | Rule ID | Location | Details |\n`;
+            summaryMarkdown += `| :--- | :--- | :--- | :--- |\n`;
+            for (const item of results) {
+                const levelIcon = item.level === 'error'
+                    ? '🔴 ERROR'
+                    : item.level === 'warning'
+                        ? '🟡 WARN'
+                        : '🔵 NOTE';
+                const fileLoc = item.locations[0]?.physicalLocation;
+                const uri = fileLoc?.artifactLocation?.uri || 'unknown';
+                const line = fileLoc?.region?.startLine ?? 1;
+                const locationStr = `\`${uri}:${line}\``;
+                const message = item.message?.text?.replace(/\n/g, ' ') || '';
+                summaryMarkdown += `| ${levelIcon} | \`${item.ruleId}\` | ${locationStr} | ${message} |\n`;
+                // Emit native GitHub workflow annotations in diff
+                core.error(message, {
+                    file: uri,
+                    startLine: line,
+                    title: item.ruleId,
+                });
+            }
         }
-        // 3. Line-level Annotations in the "Files Changed" tab
-        for (const match of matches) {
-            core.error(match.extra.message, {
-                file: match.path,
-                startLine: match.start.line,
-                endLine: match.end.line,
-                title: `vibe-shield: ${match.check_id}`
-            });
+        // Write to GitHub Job Summary tab
+        await core.summary.addRaw(summaryMarkdown).write();
+        // 6. Post/Update Pull Request Comment if token provided
+        if (token) {
+            await postOrUpdatePrComment(token, summaryMarkdown);
         }
-        // 4. Consolidated Pull Request Comment
-        if (context.payload.pull_request) {
-            const prNumber = context.payload.pull_request.number;
-            let body = `## 🚨 vibe-shield Security Gate: Violations Found\n\n`;
-            body += `Scanned target \`${targetDir}\` and found **${matches.length}** high-severity pattern(s):\n\n`;
-            matches.forEach((m, idx) => {
-                body += `### ${idx + 1}. \`${m.check_id}\`\n`;
-                body += `* **File:** \`${m.path}#L${m.start.line}\`\n`;
-                body += `* **Severity:** \`${m.extra.severity}\`\n\n`;
-                body += `> ${m.extra.message.trim().replace(/\n/g, '\n> ')}\n\n`;
-            });
-            body += `\n*Action required: Remediate the issues listed above or check the inline annotations in **Files Changed** to unblock deployment.*`;
-            await octokit.rest.issues.createComment({
-                ...context.repo,
-                issue_number: prNumber,
-                body
-            });
+        // 7. Fail Action if violations were found
+        if (totalViolations > 0 || semgrepExitCode !== 0) {
+            core.setFailed(`vibe-shield scan failed with ${totalViolations} security violation(s).`);
         }
-        core.setFailed(`vibe-shield audit failed with ${matches.length} issue(s).`);
+        else {
+            core.info('✅ vibe-shield completed successfully with zero violations.');
+        }
     }
     catch (error) {
-        core.setFailed(`vibe-shield execution failure: ${error.message}`);
+        core.setFailed(error.message);
     }
 }
 run();

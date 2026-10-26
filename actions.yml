@@ -1,17 +1,22 @@
-name: 'vibe-shield'
-description: 'Zero-config security analysis for Next.js, Prisma, and Stripe apps'
-author: 'vibe-shield'
 
+
+  name: 'vibe-shield'
+description: 'AI-generated code security auditor and slopsquatting detector'
 inputs:
   github-token:
-    description: 'GitHub token for posting review comments'
+    description: 'GitHub token for PR comments and checks'
     required: false
-    default: ${{ github.token }}
   target-dir:
-    description: 'Subdirectory to scan'
+    description: 'Target directory to analyze'
     required: false
     default: '.'
-
+  sarif:
+    description: 'Generate SARIF report file for GitHub Code Scanning'
+    required: false
+    default: 'false'
+outputs:
+  sarif-file:
+    description: 'Path to generated SARIF report'
 runs:
   using: 'node20'
   main: 'dist/index.js'

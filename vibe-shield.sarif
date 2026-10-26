@@ -1,0 +1,108 @@
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "toolExecutionNotifications": []
+        }
+      ],
+      "results": [],
+      "tool": {
+        "driver": {
+          "name": "vibe-shield",
+          "rules": [
+            {
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "fullDescription": {
+                "text": "BOLA/IDOR Flaw: Modifying database records by 'id' alone.\nQueries must scope by tenant/user context (e.g., where: { id, organizationId }).\n"
+              },
+              "help": {
+                "markdown": "BOLA/IDOR Flaw: Modifying database records by 'id' alone.\nQueries must scope by tenant/user context (e.g., where: { id, organizationId }).\n",
+                "text": "BOLA/IDOR Flaw: Modifying database records by 'id' alone.\nQueries must scope by tenant/user context (e.g., where: { id, organizationId }).\n"
+              },
+              "id": "rules.nextjs-prisma-unscoped-mutation",
+              "name": "rules.nextjs-prisma-unscoped-mutation",
+              "properties": {
+                "precision": "very-high",
+                "tags": []
+              },
+              "shortDescription": {
+                "text": "Semgrep Finding: rules.nextjs-prisma-unscoped-mutation"
+              }
+            },
+            {
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "fullDescription": {
+                "text": "Secret Exposure: Backend secrets mapped to NEXT_PUBLIC_* variables\nleak into the client-side JavaScript bundle.\n"
+              },
+              "help": {
+                "markdown": "Secret Exposure: Backend secrets mapped to NEXT_PUBLIC_* variables\nleak into the client-side JavaScript bundle.\n",
+                "text": "Secret Exposure: Backend secrets mapped to NEXT_PUBLIC_* variables\nleak into the client-side JavaScript bundle.\n"
+              },
+              "id": "rules.nextjs-public-secret-bleed",
+              "name": "rules.nextjs-public-secret-bleed",
+              "properties": {
+                "precision": "very-high",
+                "tags": []
+              },
+              "shortDescription": {
+                "text": "Semgrep Finding: rules.nextjs-public-secret-bleed"
+              }
+            },
+            {
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "fullDescription": {
+                "text": "Unverified Webhook: Directly parsing req.json() bypasses HMAC validation.\nStripe webhooks require raw text (req.text()) verified via stripe.webhooks.constructEvent().\n"
+              },
+              "help": {
+                "markdown": "Unverified Webhook: Directly parsing req.json() bypasses HMAC validation.\nStripe webhooks require raw text (req.text()) verified via stripe.webhooks.constructEvent().\n",
+                "text": "Unverified Webhook: Directly parsing req.json() bypasses HMAC validation.\nStripe webhooks require raw text (req.text()) verified via stripe.webhooks.constructEvent().\n"
+              },
+              "id": "rules.nextjs-stripe-unsigned-webhook",
+              "name": "rules.nextjs-stripe-unsigned-webhook",
+              "properties": {
+                "precision": "very-high",
+                "tags": []
+              },
+              "shortDescription": {
+                "text": "Semgrep Finding: rules.nextjs-stripe-unsigned-webhook"
+              }
+            },
+            {
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "fullDescription": {
+                "text": "Public RPC Exposure: Server Action performs database mutations without\nsession validation at the top of the function.\n"
+              },
+              "help": {
+                "markdown": "Public RPC Exposure: Server Action performs database mutations without\nsession validation at the top of the function.\n",
+                "text": "Public RPC Exposure: Server Action performs database mutations without\nsession validation at the top of the function.\n"
+              },
+              "id": "rules.nextjs-unprotected-server-action",
+              "name": "rules.nextjs-unprotected-server-action",
+              "properties": {
+                "precision": "very-high",
+                "tags": []
+              },
+              "shortDescription": {
+                "text": "Semgrep Finding: rules.nextjs-unprotected-server-action"
+              }
+            }
+          ],
+          "semanticVersion": "1.182.1",
+          "informationUri": "https://github.com/kennedy1020/vibe-shield"
+        }
+      }
+    }
+  ],
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json"
+}
