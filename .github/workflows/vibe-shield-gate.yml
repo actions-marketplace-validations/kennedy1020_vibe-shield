@@ -1,0 +1,45 @@
+name: vibe-shield Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  gate:
+    name: Run vibe-shield Gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Semgrep Engine
+        run: pip install semgrep
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies & Build Action
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run vibe-shield Gate
+        uses: ./
+        with:
+          target-dir: '.'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sarif: 'false'
