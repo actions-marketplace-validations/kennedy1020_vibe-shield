@@ -35,7 +35,7 @@ jobs:
 
       - name: Run vibe-shield Security Audit
         id: vibe-shield
-        uses: kennedy1020/vibe-shield@v1
+        uses: ./
         with:
           target-dir: '.'
           sarif: 'true'
