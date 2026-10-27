@@ -1,20 +1,6 @@
-export interface SarifRule {
-    id: string;
-    name: string;
-    shortDescription: {
-        text: string;
-    };
-    fullDescription?: {
-        text: string;
-    };
-    defaultConfiguration: {
-        level: 'error' | 'warning' | 'note';
-    };
-    helpUri?: string;
-}
 export interface SarifResult {
     ruleId: string;
-    level: 'error' | 'warning' | 'note';
+    level: string;
     message: {
         text: string;
     };
@@ -30,20 +16,20 @@ export interface SarifResult {
         };
     }>;
 }
-export interface SarifLog {
+export interface SarifRun {
+    tool: {
+        driver: {
+            name: string;
+            version: string;
+            informationUri?: string;
+            rules: any[];
+        };
+    };
+    results: SarifResult[];
+}
+export interface SarifReport {
     $schema: string;
     version: string;
-    runs: Array<{
-        tool: {
-            driver: {
-                name: string;
-                version: string;
-                informationUri: string;
-                rules: SarifRule[];
-            };
-        };
-        results: SarifResult[];
-    }>;
+    runs: SarifRun[];
 }
-export declare const SLOPSQUATTING_SARIF_RULE: SarifRule;
-export declare function mergeFindingsToSarif(baseSarifJson: string, hallucinatedPackages: string[], targetDir: string): SarifLog;
+export declare function mergeFindingsToSarif(semgrepOutput: string, hallucinatedPackages: string[], targetDir: string): SarifReport;

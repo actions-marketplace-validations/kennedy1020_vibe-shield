@@ -27,4 +27,4 @@ jobs:
         uses: ./
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          target-dir: '.'
+         sarif: 'true' 

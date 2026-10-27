@@ -18,7 +18,7 @@
   ],
   "scripts": {
     "build": "tsc && ncc build dist/action.js -o dist -m",
-    "test": "node -e \"const { execSync } = require('child_process'); try { execSync('node dist/cli.js scan test/fixtures', { stdio: 'pipe' }); console.error('Test failed: vulnerabilities were not detected'); process.exit(1); } catch (err) { if (err.status === 1) { console.log('✅ Test passed: CLI correctly detected fixture vulnerabilities with exit code 1'); process.exit(0); } throw err; }\"",
+    "test": "node test/run-test.js",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
