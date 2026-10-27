@@ -1,12 +1,20 @@
 {
   "name": "@kennedy1020/vibe-shield",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Zero-config security auditor and slopsquatting detector for Next.js, Supabase, Prisma, Stripe, Paystack, and PayPal stacks",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
     "vibe-shield": "dist/cli.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kennedy1020/vibe-shield.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kennedy1020/vibe-shield/issues"
+  },
+  "homepage": "https://github.com/kennedy1020/vibe-shield#readme",
   "publishConfig": {
     "access": "public"
   },
