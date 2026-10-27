@@ -1,209 +1,140 @@
-vibe-shield 🛡️
-Zero-config security auditor and slopsquatting detector purpose-built for AI-generated Next.js, Prisma, and Stripe architectures.
+# vibe-shield 🛡️
 
-The Problem
-Modern AI pair programmers (Claude, Cursor, Copilot, ChatGPT) excel at scaffolding full-stack applications at blistering speed—colloquially known as "vibe coding." However, Large Language Models repeatedly generate subtle, severe structural anti-patterns that standard linters and TypeScript compilers miss entirely:
+[![npm version](https://img.shields.io/npm/v/@kennedy1020/vibe-shield.svg?color=blue)](https://www.npmjs.com/package/@kennedy1020/vibe-shield)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![GitHub Action](https://img.shields.io/badge/GitHub%20Action-v1.1.0-blueviolet.svg)](https://github.com/marketplace/actions/vibe-shield)
 
-1. Slopsquatting & Hallucinated Packages: LLMs frequently invent non-existent npm dependencies (e.g., stripe-webhook-verifier, next-auth-middleware-helpers). Attackers monitor hallucination patterns and register these names on the public npm registry with malicious payloads.
+> **The Zero-Config Security Auditor for Modern AI-Generated Stacks.**  
+> Catch hallucinated packages (slopsquatting), client-side secret bleeds, unverified payment webhooks, and IDOR vulnerabilities before code reaches production.
 
-2. Client-Side Secret Bleeding: Prefixing sensitive server credentials (STRIPE_SECRET_KEY, SERVICE_ROLE_KEY) with NEXT_PUBLIC_ exposes raw private API keys directly into public client JavaScript bundles.
+---
 
-3. Unsigned Stripe Webhook Handlers: Parsing webhook bodies via req.json() instead of verifying raw cryptographic HMAC signatures allows attackers to forge mock checkout.session.completed events and provision free services.
+## ⚡ What Does vibe-shield Solve?
 
-4. BOLA / IDOR Database Mutations: Executing Prisma updates or deletions scoped solely by record id without verifying tenant boundaries (userId, organizationId).
+AI coding assistants (LLMs) accelerate web development, but introduce distinct security failure modes:
+1. **Dependency Hallucinations (Slopsquatting):** Models frequently recommend nonexistent packages in `package.json` or `requirements.txt`. Attackers register these hallucinated names on npm and PyPI to distribute malware.
+2. **Client-Side Secret Bleeds:** Server tokens placed into `NEXT_PUBLIC_` environment variables or Supabase service-role keys imported into `'use client'` files expose database access directly to browser devtools.
+3. **Unverified Payment Webhooks:** Developers frequently parse webhook event bodies (Stripe, Paystack, PayPal) without validating cryptographic signatures, allowing attackers to forge payment confirmations.
+4. **Unscoped Database Mutations:** Deleting or updating records by primary key (`id`) without verifying user or tenant identity creates Insecure Direct Object References (IDOR).
 
-5. Unauthenticated Public Server Actions: Exposing Next.js 'use server' mutations that modify databases directly without session assertion guards at the function boundary.
+`vibe-shield` is a dual-engine auditor that runs locally via CLI and automatically in CI/CD as a GitHub Action with native SARIF v2.1.0 code-scanning integration.
 
-vibe-shield combines an asynchronous npm registry verification engine with structural Abstract Syntax Tree (AST) pattern matching to block these vulnerabilities locally and inside CI/CD pull request gates.
+---
 
-Architecture: Dual-Engine Pipeline
-                               Target Project Source
-                                         │
-                 ┌───────────────────────┴───────────────────────┐
-                 ▼                                               ▼
-         [ package.json ]                              [ app/ | pages/ | src/ ]
-                 │                                               │
-                 ▼                                               ▼
-     Stage 1: Slopsquatting Audit                    Stage 2: Semgrep AST Parser
-   Async HEAD queries against npm                    Structural pattern matching on
-      Detects 404 dependencies                         Next.js, Prisma, and Stripe
-                 │                                               │
-                 └───────────────────────┬───────────────────────┘
-                                         ▼
-                            Terminal / PR Annotations
-                             Blocking Exit Status (0 | 1)
+## 🚀 Quickstart
 
-Prerequisites
-- Node.js: >= 18.0.0
+### Run via npx (Zero Installation)
 
-- Semgrep CLI: Required to execute AST rules.
-
-- macOS: brew install semgrep
-
-- Linux / WSL: pip install semgrep
-
-- Windows: python -m pip install semgrep
-
-(If Semgrep is missing, vibe-shield provides an automated pre-flight check with platform-specific instructions rather than failing unhandled).
-
-Quick Start (CLI) 
-Run vibe-shield on demand without local installation using npx:
-
-Bash
+```bash
 npx @kennedy1020/vibe-shield scan .
-To audit a specific subdirectory or monorepo workspace:
 
-Bash
-npx @kennedy1020/vibe-shield scan apps/web
-
-Global Installation
+Install Globally
 Bash
 npm install -g @kennedy1020/vibe-shield
+vibe-shield scan ./my-project 
 
-# Run anywhere
-vibe-shield scan .
+Pre-requisites
+vibe-shield uses Semgrep under the hood for AST parsing:
 
-Rules Matrix
-        Rule ID                 Vector           Severity     Flawed Pattern             Hardened Standard
-slopsquatting-hallucination    Supply-Chain      BLOCKING     Dependencies in package.json returning 404 on registry
-Verified package presence on registry.npmjs.org
-nextjs-public-secret-bleed     Info Disclosure    ERROR       process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY   Server-only env variables (STRIPE_SECRET_KEY)
-nextjs-stripe-unsigned-webhook  Broken Auth      ERROR       const event = await req.json(); stripe.webhooks.constructEvent(rawBody, sig, secret)
-nextjs-prisma-unscoped-mutation  BOLA / IDOR      ERROR        prisma.doc.delete({ where: { id } })  Multi-tenant compound clause: where: { id, userId }
-nextjs-unprotected-server-action  Public RPC      WARNING       'use server' action calling DB without session check Immediate authentication guard: const session = await auth()
+macOS: brew install semgrep
 
-GitHub Actions Integration (CI/CD)
-Enforce automated security reviews on incoming pull requests. When vulnerabilities are detected, vibe-shield posts inline line annotations under Files Changed and leaves a consolidated audit breakdown comment.
+Linux / WSL: pip install semgrep
 
-Create .github/workflows/security-audit.yml:
-name: vibe-shield Security Audit
+Windows: pip install semgrep 
+
+
+🤖 GitHub Action Setup
+Add vibe-shield to your CI pipeline to scan pull requests, comment findings directly on code, and block vulnerable merges.
+
+Create .github/workflows/security.yml: 
+YAML
+name: vibe-shield Security Gate
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
 jobs:
   audit:
-    name: Run vibe-shield Gate
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write # Required for inline reviews and PR comments
+      pull-requests: write
+      security-events: write
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Semgrep
+      - name: Install Semgrep Engine
         run: pip install semgrep
 
-      - name: Run vibe-shield
-        uses: kennedy1020/vibe-shield@v1
+      - name: Run vibe-shield Audit
+        uses: kennedy1020/vibe-shield@v1.1.0
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
           target-dir: '.'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sarif: 'true'
 
- Action Configuration Parameters
- Input         Required  Default  Description
- github-token   Yes        N/A      ${{ secrets.GITHUB_TOKEN }} for annotating PRs and leaving summary comments.
- target-dir      No         .      Target directory to evaluate (relative to repository root).
+      - name: Upload SARIF to GitHub Security Tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: vibe-shield.sarif 
 
- Vulnerability Remediation Examples
-1. Client-Side Secret Leak
-❌ Vulnerable:
 
-TypeScript
-// Leaks secret key into client bundle
-export const STRIPE_KEY = process.env.NEXT_PUBLIC_STRIPE_SECRET_KEY;
+📋 Detection Engine Ruleset
+RuleID | Severity  | Ecosystem  | Description
+slopsquatting-missing-package  |🔴 CRITICAL  |npm/PyPI  |Flags packages in package.json or requirements.txt returning HTTP 404 on public registries.nextjs-public-secret-bleed  |🔴 CRITICAL  |Next.js/React  | Detects server secrets, API tokens, or credentials bound to NEXT_PUBLIC_ variables.nextjs-supabase-service-role-client  |🔴 CRITICAL | Supabase/Next.js  |Detects SUPABASE_SERVICE_ROLE_KEY or admin clients inside 'use client' components.hardcoded-payment-live-secret  | 🔴 CRITICAL  | Stripe/Paystack  | Flags hardcoded live secret keys (sk_live_...) in application files.nextjs-stripe-unsigned-webhook  |🔴 HIGH  | Stripe/Next.js  |Flags webhook routes processing payloads without stripe.webhooks.constructEvent.nextjs-paystack-unsigned-webhook  |🔴 HIGH  | Paystack/Next.js  | Flags webhook routes processing events without HMAC SHA-512 signature verification.nextjs-paypal-unsigned-webhook  |🔴 HIGH  | PayPal/Next.js  | Flags webhook routes evaluating event_type without payload signature checks.nextjs-prisma-unscoped-mutation   |🟡 WARNING  | Prisma ORM | Flags delete or update operations keyed only on id without userId or tenantId.
 
-✅ Secure:
+⚙️ Configuration (.vibeshieldrc.json)
+Customize scanner behavior, bypass private company packages, exclude directories, or tune rule strictness by creating a .vibeshieldrc.json in your repository root: 
 
-TypeScript
-// Strictly isolated to Node.js server runtime
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2023-10-16',
-}); 
 
-2. Insecure Stripe Webhook Handling
-❌ Vulnerable:
-
-TypeScript
-export async function POST(req: Request) {
-  // Attacker can craft arbitrary payloads without signature verification
-  const event = await req.json();
-  if (event.type === 'checkout.session.completed') {
-    await fulfillOrder(event.data.object);
+JSON
+{
+  "allowPackages": [
+    "@company/internal-ui",
+    "@company/private-auth"
+  ],
+  "excludePaths": [
+    "cypress/**",
+    "scripts/**",
+    "**/*.spec.ts"
+  ],
+  "rules": {
+    "nextjs-prisma-unscoped-mutation": "warning",
+    "nextjs-stripe-unsigned-webhook": "error",
+    "nextjs-paystack-unsigned-webhook": "off"
   }
-  return Response.json({ received: true });
 } 
 
-✅ Secure:
+
+🔕 Inline Comment Suppressions
+Suppress false positives on specific lines without disabling rules project-wide:
 
 TypeScript
-export async function POST(req: Request) {
-  const body = await req.text();
-  const signature = req.headers.get('stripe-signature')!;
-  
-  const event = stripe.webhooks.constructEvent(
-    body,
-    signature,
-    process.env.STRIPE_WEBHOOK_SECRET!
-  );
+// Suppress check on this line
+// vibe-shield-ignore: nextjs-public-secret-bleed
+export const PUBLIC_KEY = process.env.NEXT_PUBLIC_ANALYTICS_KEY;
 
-  if (event.type === 'checkout.session.completed') {
-    await fulfillOrder(event.data.object);
-  }
-  return Response.json({ received: true });
-} 
+// Suppress check on the following line
+// vibe-shield-ignore-next-line: nextjs-prisma-unscoped-mutation
+await prisma.account.delete({ where: { id: accountId } }); 
 
-3. Unscoped Prisma Mutations (BOLA/IDOR)
-❌ Vulnerable:
 
-TypeScript
-export async function deleteDocument(docId: string) {
-  // Allows any authenticated user to delete another tenant's document
-  return await prisma.document.delete({
-    where: { id: docId }
-  });
-} 
+🛠️ CLI Reference
+Plaintext
+Usage: vibe-shield scan [options] [target]
 
-✅ Secure:
+Audit target directory for slopsquatting and AST security flaws
 
-TypeScript
-export async function deleteDocument(docId: string, organizationId: string) {
-  // Scoped strictly to the active tenant/organization
-  return await prisma.document.delete({
-    where: {
-      id: docId,
-      organizationId: organizationId
-    }
-  });
-} 
+Options:
+  -f, --format <type>  Output format: text | sarif (default: "text")
+  -o, --output <file>  Path to write report (default: stdout for text, vibe-shield.sarif for sarif)
+  -h, --help           display help for command 
 
-Development & Contribution
-Setup Local Environment
-Bash
-# Clone the repository
-git clone https://github.com/kennedy1020/vibe-shield.git
-cd vibe-shield
-
-# Install dev dependencies
-npm install
-
-# Build the CLI (tsc) and standalone Action bundle (@vercel/ncc)
-npm run build
-
-# Run local test runner against test fixtures
-npm run test:local 
-
-Linking the CLI Globally for Local Testing
-Bash
-npm link
-vibe-shield scan test/fixtures 
-
-License
-Distributed under the MIT License. Built by Kennedy Adongo. 
+  📄 License
+MIT © vibe-shield Contributors 

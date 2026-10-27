@@ -1,0 +1,49 @@
+name: Security Audit & Code Scanning
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run every Monday at midnight UTC to audit new dependency vulnerabilities
+    - cron: '0 0 * * 1'
+
+permissions:
+  contents: read
+  security-events: write   # Required to upload findings to GitHub Code Scanning
+  pull-requests: write     # Required for vibe-shield PR summary tables and comments
+
+jobs:
+  audit:
+    name: vibe-shield & SARIF Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Semgrep Engine
+        run: |
+          python -m pip install --upgrade pip
+          pip install semgrep
+
+      - name: Run vibe-shield Security Audit
+        id: vibe-shield
+        uses: kennedy1020/vibe-shield@v1
+        with:
+          target-dir: '.'
+          sarif: 'true'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() # Critical: runs even if vibe-shield fails due to detected security flaws
+        with:
+          sarif_file: vibe-shield.sarif
+          category: vibe-shield

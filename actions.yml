@@ -1,22 +1,28 @@
+name: 'vibe-shield'
+description: 'AI code auditor & slopsquatting detector for Next.js, Supabase, Prisma, and payment stacks'
+author: 'vibe-shield'
+branding:
+  icon: 'shield'
+  color: 'blue'
 
-
-  name: 'vibe-shield'
-description: 'AI-generated code security auditor and slopsquatting detector'
 inputs:
-  github-token:
-    description: 'GitHub token for PR comments and checks'
-    required: false
   target-dir:
-    description: 'Target directory to analyze'
+    description: 'Path to the directory to scan'
     required: false
     default: '.'
-  sarif:
-    description: 'Generate SARIF report file for GitHub Code Scanning'
+  github-token:
+    description: 'GitHub Token for posting automated security scan summaries to Pull Requests'
     required: false
-    default: 'false'
+    default: ${{ github.token }}
+  sarif:
+    description: 'Generate SARIF v2.1.0 report for GitHub Code Scanning integration'
+    required: false
+    default: 'true'
+
 outputs:
   sarif-file:
-    description: 'Path to generated SARIF report'
+    description: 'Absolute path to the generated SARIF report file'
+
 runs:
   using: 'node20'
   main: 'dist/index.js'
