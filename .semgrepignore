@@ -1,0 +1,9 @@
+# Default ignore paths
+node_modules/
+dist/
+.next/
+coverage/
+
+# Un-ignore test directory so fixtures are scanned
+!test/
+!test/fixtures/

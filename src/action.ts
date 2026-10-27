@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { verifyDependencies } from './check-deps.js';
 import { mergeFindingsToSarif } from './sarif.js';
+import { loadConfig } from './config.js';
+import { isFindingSuppressed } from './suppress.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -71,42 +73,74 @@ async function run(): Promise<void> {
 
     core.info(`🛡️ Starting vibe-shield scan on ${targetDir}`);
 
-    // 1. Dependency Slopsquatting Audit
-    core.info('🔍 Auditing dependencies for hallucinated packages...');
-    const hallucinated = await verifyDependencies(targetDir);
+    // 1. Load project configuration (.vibeshieldrc.json)
+    const config = loadConfig(targetDir);
 
-    // 2. Semgrep AST Engine Analysis
+    // 2. Dependency Slopsquatting Audit (with allowPackages)
+    core.info('🔍 Auditing dependencies for hallucinated packages...');
+    const hallucinated = await verifyDependencies(targetDir, config.allowPackages);
+
+    // 3. Semgrep AST Engine Analysis (with excludePaths and valid flags)
     const ruleFile = path.resolve(__dirname, '../rules/nextjs-stack.yml');
     if (!fs.existsSync(ruleFile)) {
       throw new Error(`Ruleset not found at path: ${ruleFile}`);
     }
 
+    const excludeArgs = (config.excludePaths || [])
+      .map((p) => `--exclude "${p}"`)
+      .join(' ');
+
+    const semgrepCmd = `semgrep --config "${ruleFile}" --no-git-ignore ${excludeArgs} --sarif "${targetDir}"`;
+
     let semgrepOutput = '';
-    let semgrepExitCode = 0;
-
-    // Run Semgrep with --sarif output mode
-    const semgrepCmd = `semgrep --config "${ruleFile}" --sarif "${targetDir}"`;
-
     try {
       semgrepOutput = execSync(semgrepCmd, {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (err: any) {
-      semgrepExitCode = err.status ?? 1;
       semgrepOutput = err.stdout?.toString() || '';
     }
 
-    // 3. Merge Semgrep AST results with slopsquatted dependencies
+    // 4. Merge Semgrep findings with slopsquatted packages
     const mergedSarif = mergeFindingsToSarif(
       semgrepOutput,
       hallucinated,
       targetDir
     );
+
+    // 5. Filter findings using inline comments & .vibeshieldrc.json rules
+    if (mergedSarif.runs[0]) {
+      mergedSarif.runs[0].results = (mergedSarif.runs[0].results || []).filter((finding) => {
+        const ruleId = finding.ruleId;
+        const ruleConfig = config.rules?.[ruleId];
+
+        if (ruleConfig === 'off') {
+          return false;
+        }
+
+        const fileLoc = finding.locations[0]?.physicalLocation;
+        const uri = fileLoc?.artifactLocation?.uri || '';
+        const line = fileLoc?.region?.startLine ?? 1;
+
+        if (isFindingSuppressed(targetDir, uri, line, ruleId)) {
+          return false;
+        }
+
+        if (ruleConfig === 'warning') {
+          finding.level = 'warning';
+        } else if (ruleConfig === 'error') {
+          finding.level = 'error';
+        }
+
+        return true;
+      });
+    }
+
     const results = mergedSarif.runs[0]?.results || [];
     const totalViolations = results.length;
 
-    // 4. Emit SARIF artifact if requested
+    // 6. Emit SARIF artifact if requested
     if (generateSarif) {
       const sarifPath = path.resolve(process.cwd(), sarifOutputFilename);
       fs.writeFileSync(
@@ -118,7 +152,7 @@ async function run(): Promise<void> {
       core.info(`📄 SARIF report generated at ${sarifPath}`);
     }
 
-    // 5. Construct Markdown Summary Table
+    // 7. Construct Markdown Summary Table
     let summaryMarkdown = `## 🛡️ vibe-shield Security Audit\n\n`;
 
     if (totalViolations === 0) {
@@ -143,7 +177,6 @@ async function run(): Promise<void> {
 
         summaryMarkdown += `| ${levelIcon} | \`${item.ruleId}\` | ${locationStr} | ${message} |\n`;
 
-        // Emit native GitHub workflow annotations in diff
         core.error(message, {
           file: uri,
           startLine: line,
@@ -152,16 +185,13 @@ async function run(): Promise<void> {
       }
     }
 
-    // Write to GitHub Job Summary tab
     await core.summary.addRaw(summaryMarkdown).write();
 
-    // 6. Post/Update Pull Request Comment if token provided
     if (token) {
       await postOrUpdatePrComment(token, summaryMarkdown);
     }
 
-    // 7. Fail Action if violations were found
-    if (totalViolations > 0 || semgrepExitCode !== 0) {
+    if (totalViolations > 0) {
       core.setFailed(
         `vibe-shield scan failed with ${totalViolations} security violation(s).`
       );

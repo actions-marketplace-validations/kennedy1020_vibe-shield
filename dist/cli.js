@@ -6,10 +6,11 @@ import { execSync } from 'node:child_process';
 import { Command } from 'commander';
 import { verifyDependencies } from './check-deps.js';
 import { mergeFindingsToSarif } from './sarif.js';
+import { loadConfig } from './config.js';
+import { isFindingSuppressed } from './suppress.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const program = new Command();
-// ... rest of src/cli.ts remains identical
 function isSemgrepInstalled() {
     try {
         execSync('semgrep --version', { stdio: 'ignore' });
@@ -30,7 +31,7 @@ function printSemgrepMissingMessage() {
 program
     .name('vibe-shield')
     .description('Zero-config security auditor and slopsquatting detector for Next.js, Prisma, and Stripe stacks')
-    .version('1.0.2');
+    .version('1.1.0');
 program
     .command('scan [target]')
     .description('Audit target directory for slopsquatting and AST security flaws')
@@ -44,74 +45,103 @@ program
         console.error(`\n❌ Error: Target path does not exist: ${targetDir}`);
         process.exit(1);
     }
-    // 2. Pre-flight Check: Ensure Semgrep is accessible
+    // 2. Pre-flight check: Semgrep availability
     if (!isSemgrepInstalled()) {
         printSemgrepMissingMessage();
         process.exit(1);
     }
+    // 3. Load project configuration (.vibeshieldrc.json)
+    const config = loadConfig(targetDir);
     if (!isSarif) {
         console.log(`\n🛡️  vibe-shield: Auditing ${targetDir}`);
         console.log('🔍 Auditing dependencies for AI package hallucinations (slopsquatting)...');
     }
-    // 3. Stage 1: Dependency Slopsquatting Audit
+    // 4. Stage 1: Dependency Slopsquatting Audit (with allowPackages filter)
     let hallucinated = [];
     try {
-        hallucinated = await verifyDependencies(targetDir);
+        hallucinated = await verifyDependencies(targetDir, config.allowPackages);
     }
     catch (err) {
         if (!isSarif) {
-            console.warn(`⚠️  Warning: Could not audit package.json dependencies: ${err.message}`);
+            console.warn(`⚠️  Warning: Could not audit package dependencies: ${err.message}`);
         }
     }
-    if (!isSarif && hallucinated.length > 0) {
-        console.error('\n❌ CRITICAL: Unregistered / Hallucinated Dependencies Detected:');
-        hallucinated.forEach((pkg) => console.error(`   - ${pkg} (404 on npm registry)`));
-        console.error('\nAborting scan. Verify dependencies before proceeding.');
-        process.exit(1);
-    }
-    if (!isSarif) {
-        console.log('✅ Dependencies verified against public registry.');
-        console.log('🚀 Executing AST pattern analysis...');
-    }
-    // 4. Stage 2: Semgrep AST Rule Engine
+    // 5. Stage 2: Semgrep AST Rule Engine
     const ruleFile = path.resolve(__dirname, '../rules/nextjs-stack.yml');
     if (!fs.existsSync(ruleFile)) {
         console.error(`\n❌ Error: Ruleset not found at ${ruleFile}`);
         process.exit(1);
     }
+    const excludeArgs = (config.excludePaths || [])
+        .map((p) => `--exclude "${p}"`)
+        .join(' ');
+    const semgrepArgs = `semgrep --config "${ruleFile}" --no-git-ignore ${excludeArgs} --sarif "${targetDir}"`;
     let semgrepOutput = '';
-    let semgrepExitCode = 0;
-    const semgrepArgs = isSarif
-        ? `semgrep --config "${ruleFile}" --sarif "${targetDir}"`
-        : `semgrep --config "${ruleFile}" "${targetDir}"`;
     try {
         semgrepOutput = execSync(semgrepArgs, {
             encoding: 'utf-8',
-            stdio: isSarif ? ['pipe', 'pipe', 'pipe'] : 'inherit',
+            stdio: ['pipe', 'pipe', 'pipe'],
         });
     }
     catch (err) {
-        semgrepExitCode = err.status ?? 1;
         semgrepOutput = err.stdout?.toString() || '';
+        if (!semgrepOutput && err.stderr) {
+            console.error(`\n⚠️  Semgrep engine error:\n${err.stderr.toString()}`);
+        }
     }
-    // 5. Stage 3: Emit Formatted Results
+    // 6. Merge & Filter Findings (Inline comments + Config rule overrides)
+    const mergedSarif = mergeFindingsToSarif(semgrepOutput, hallucinated, targetDir);
+    if (mergedSarif.runs[0]) {
+        mergedSarif.runs[0].results = (mergedSarif.runs[0].results || []).filter((finding) => {
+            const ruleId = finding.ruleId;
+            const ruleConfig = config.rules?.[ruleId];
+            // Rule disabled in .vibeshieldrc.json
+            if (ruleConfig === 'off') {
+                return false;
+            }
+            // Inline comment suppression (// vibe-shield-ignore: rule-id)
+            const fileLoc = finding.locations[0]?.physicalLocation;
+            const uri = fileLoc?.artifactLocation?.uri || '';
+            const line = fileLoc?.region?.startLine ?? 1;
+            if (isFindingSuppressed(targetDir, uri, line, ruleId)) {
+                return false;
+            }
+            // Severity override
+            if (ruleConfig === 'warning') {
+                finding.level = 'warning';
+            }
+            else if (ruleConfig === 'error') {
+                finding.level = 'error';
+            }
+            return true;
+        });
+    }
+    const activeResults = mergedSarif.runs[0]?.results || [];
+    const totalViolations = activeResults.length;
+    // 7. Output Handling
     if (isSarif) {
-        const mergedSarif = mergeFindingsToSarif(semgrepOutput, hallucinated, targetDir);
-        const sarifJson = JSON.stringify(mergedSarif, null, 2);
         const outputFile = options.output || 'vibe-shield.sarif';
         const outputPath = path.resolve(process.cwd(), outputFile);
-        fs.writeFileSync(outputPath, sarifJson, 'utf-8');
+        fs.writeFileSync(outputPath, JSON.stringify(mergedSarif, null, 2), 'utf-8');
         console.log(`🛡️  vibe-shield: SARIF report written to ${outputFile}`);
-        const totalFindings = mergedSarif.runs[0]?.results?.length || 0;
-        process.exit(totalFindings > 0 ? 1 : 0);
+        process.exit(totalViolations > 0 ? 1 : 0);
     }
     else {
-        if (semgrepExitCode !== 0) {
-            console.error('\n🚨 vibe-shield detected security violations requiring resolution.\n');
-            process.exit(semgrepExitCode);
+        if (totalViolations === 0) {
+            console.log('✅ Dependencies verified against public registry.');
+            console.log('✨ No security violations or unsuppressed flaws detected.\n');
+            process.exit(0);
         }
-        console.log('\n✨ No security violations or slopsquatted packages detected.\n');
-        process.exit(0);
+        console.error(`\n🚨 Detected ${totalViolations} security issue(s):\n`);
+        for (const item of activeResults) {
+            const fileLoc = item.locations[0]?.physicalLocation;
+            const uri = fileLoc?.artifactLocation?.uri || 'unknown';
+            const line = fileLoc?.region?.startLine ?? 1;
+            const levelTag = item.level === 'error' ? 'CRITICAL' : 'WARNING';
+            console.error(`  • ${uri}:${line}`);
+            console.error(`    ${levelTag} [${item.ruleId}]: ${item.message.text}\n`);
+        }
+        process.exit(1);
     }
 });
 program.parse(process.argv);

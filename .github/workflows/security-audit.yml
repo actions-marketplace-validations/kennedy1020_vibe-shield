@@ -24,7 +24,7 @@ jobs:
         run: pip install semgrep
 
       - name: Run vibe-shield
-        uses: kennedy1020/vibe-shield@v1
+        uses: ./
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          target-dir: '.'
+         sarif: 'true' 

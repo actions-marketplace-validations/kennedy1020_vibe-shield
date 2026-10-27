@@ -1,76 +1,166 @@
 rules:
-  # 1. Unscoped Database Mutation / Read (IDOR)
-  - id: nextjs-prisma-unscoped-mutation
+  # ---------------------------------------------------------------------------
+  # 1. Client-Side Secret Bleed: NEXT_PUBLIC_ Environment Variables
+  # ---------------------------------------------------------------------------
+  - id: nextjs-public-secret-bleed
+    patterns:
+      - pattern: process.env.NEXT_PUBLIC_$KEY
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: "(?i).*(SECRET|PRIVATE|TOKEN|PASSWORD|SERVICE_ROLE|STRIPE_SECRET|PAYSTACK_SECRET|PAYPAL_SECRET|DATABASE_URL|ADMIN_KEY).*"
+    message: "CRITICAL: Potential server secret bound to a NEXT_PUBLIC_ variable ($KEY). Variables prefixed with NEXT_PUBLIC_ are inlined into client-side JavaScript bundles and publicly accessible in browsers."
     languages: [typescript, javascript]
     severity: ERROR
-    message: |
-      BOLA/IDOR Flaw: Modifying database records by 'id' alone.
-      Queries must scope by tenant/user context (e.g., where: { id, organizationId }).
+
+  # ---------------------------------------------------------------------------
+  # 2. Supabase Admin Key Leakage in Client Components ('use client')
+  # ---------------------------------------------------------------------------
+  - id: nextjs-supabase-service-role-client
     patterns:
       - pattern-either:
-          - pattern: '$PRISMA.$MODEL.update({ where: { id: $ID }, ... })'
-          - pattern: '$PRISMA.$MODEL.delete({ where: { id: $ID }, ... })'
-      - pattern-not: '$PRISMA.$MODEL.update({ where: { id: $ID, organizationId: $ORG, ... }, ... })'
-      - pattern-not: '$PRISMA.$MODEL.update({ where: { id: $ID, userId: $USER, ... }, ... })'
-      - pattern-not: '$PRISMA.$MODEL.delete({ where: { id: $ID, organizationId: $ORG, ... }, ... })'
-      - pattern-not: '$PRISMA.$MODEL.delete({ where: { id: $ID, userId: $USER, ... }, ... })'
+          - pattern: |
+              'use client';
+              ...
+              createClient($URL, process.env.SUPABASE_SERVICE_ROLE_KEY, ...)
+          - pattern: |
+              'use client';
+              ...
+              createClient($URL, process.env.SUPABASE_SERVICE_KEY, ...)
+          - pattern: |
+              'use client';
+              ...
+              createClient($URL, process.env.SUPABASE_ADMIN_KEY, ...)
+          - pattern: |
+              'use client';
+              ...
+              createClient($URL, $KEY, { auth: { persistSession: false }, ... })
+          - pattern: |
+              'use client';
+              ...
+              createClient($URL, $KEY, { ..., auth: { persistSession: false } })
+          - pattern: |
+              'use client';
+              ...
+              process.env.SUPABASE_SERVICE_ROLE_KEY
+          - pattern: |
+              'use client';
+              ...
+              process.env.SUPABASE_ADMIN_KEY
+    message: "CRITICAL: Supabase service role / admin key utilized inside a Client Component ('use client'). Service keys bypass Row Level Security (RLS) and grant unrestricted administrative database access to end users."
+    languages: [typescript, javascript]
+    severity: ERROR
 
-  # 2. Insecure Stripe Webhook (Parsed JSON without HMAC check)
+  # ---------------------------------------------------------------------------
+  # 3. Hardcoded Payment Live Secrets (Stripe & Paystack)
+  # ---------------------------------------------------------------------------
+  - id: hardcoded-payment-live-secret
+    pattern-regex: 'sk_live_[0-9a-zA-Z]{20,}'
+    message: "CRITICAL: Hardcoded live payment secret key (Stripe / Paystack sk_live_...) detected in source code. Secret keys must be loaded from secure server-side environment variables."
+    languages: [generic]
+    severity: ERROR
+
+  # ---------------------------------------------------------------------------
+  # 4. Unsigned Stripe Webhook Handler (Payload Forgery)
+  # ---------------------------------------------------------------------------
   - id: nextjs-stripe-unsigned-webhook
+    patterns:
+      - pattern-either:
+          - pattern: |
+              export async function POST(req: $REQ) {
+                ...
+                const $EVENT = await req.json();
+                ...
+              }
+          - pattern: |
+              export async function POST(req: $REQ) {
+                ...
+                const $EVENT = JSON.parse($BODY);
+                ...
+              }
+      - pattern-not-inside: |
+          ...
+          stripe.webhooks.constructEvent(...)
+          ...
+    message: "HIGH: Stripe webhook endpoint processes raw payload without verifying cryptographic signatures using stripe.webhooks.constructEvent. An attacker can forge subscription and payment events."
     languages: [typescript, javascript]
     severity: ERROR
-    message: |
-      Unverified Webhook: Directly parsing req.json() bypasses HMAC validation.
-      Stripe webhooks require raw text (req.text()) verified via stripe.webhooks.constructEvent().
+
+  # ---------------------------------------------------------------------------
+  # 5. Unsigned Paystack Webhook Handler (Missing HMAC SHA-512 Verification)
+  # ---------------------------------------------------------------------------
+  - id: nextjs-paystack-unsigned-webhook
     patterns:
+      - pattern-either:
+          - pattern: |
+              export async function POST(req: $REQ) {
+                ...
+                const $BODY = await req.json();
+                ...
+              }
+          - pattern: |
+              export async function POST(req: $REQ) {
+                ...
+                const $BODY = JSON.parse($RAW);
+                ...
+              }
       - pattern-inside: |
-          export async function POST(req: $REQ) {
-            ...
-          }
-      - pattern: 'const $BODY = await req.json();'
-      - pattern-not-inside: 'stripe.webhooks.constructEvent(...)'
-
-  # 3. Client-Side Secret Bleed (Fixed: Captures full AST identifier node)
-  - id: nextjs-public-secret-bleed
+          ...
+          $EVENT = $BODY.event;
+          ...
+      - pattern-not-inside: |
+          ...
+          crypto.createHmac('sha512', ...)
+          ...
+    message: "HIGH: Paystack webhook processes events without verifying HMAC SHA-512 signature against the 'x-paystack-signature' header. An attacker can forge payment success webhooks."
     languages: [typescript, javascript]
     severity: ERROR
-    message: |
-      Secret Exposure: Backend secrets mapped to NEXT_PUBLIC_* variables
-      leak into the client-side JavaScript bundle.
-    patterns:
-      - pattern: 'process.env.$KEY'
-      - metavariable-regex:
-          metavariable: '$KEY'
-          regex: '^NEXT_PUBLIC_.*(STRIPE_SECRET|SECRET|SERVICE_ROLE|PRIVATE_KEY|DATABASE_URL)'
 
-  # 4. Unprotected Server Action (Fixed: Handles chained Prisma calls)
-  - id: nextjs-unprotected-server-action
+  # ---------------------------------------------------------------------------
+  # 6. Unsigned PayPal Webhook Handler (Missing Signature Verification)
+  # ---------------------------------------------------------------------------
+  - id: nextjs-paypal-unsigned-webhook
+    patterns:
+      - pattern-either:
+          - pattern: |
+              export async function POST(req: $REQ) {
+                ...
+                const $BODY = await req.json();
+                ...
+              }
+      - pattern-inside: |
+          ...
+          $BODY.event_type
+          ...
+      - pattern-not-inside: |
+          ...
+          verifyWebhookSignature(...)
+          ...
+      - pattern-not-inside: |
+          ...
+          paypal.notification.webhookEvent.verify(...)
+          ...
+    message: "HIGH: PayPal webhook endpoint reads 'event_type' without validating payload authenticity via verifyWebhookSignature or PayPal SDK verification API."
+    languages: [typescript, javascript]
+    severity: ERROR
+
+  # ---------------------------------------------------------------------------
+  # 7. IDOR: Unscoped Prisma Mutations
+  # ---------------------------------------------------------------------------
+  - id: nextjs-prisma-unscoped-mutation
+    patterns:
+      - pattern-either:
+          - pattern: |
+              prisma.$MODEL.delete({ where: { id: $ID } })
+          - pattern: |
+              prisma.$MODEL.update({ where: { id: $ID }, data: $DATA })
+      - pattern-not: |
+          prisma.$MODEL.delete({ where: { id: $ID, userId: $USER_ID, ... } })
+      - pattern-not: |
+          prisma.$MODEL.update({ where: { id: $ID, userId: $USER_ID, ... }, data: $DATA })
+      - pattern-not: |
+          prisma.$MODEL.delete({ where: { id: $ID, tenantId: $TENANT_ID, ... } })
+      - pattern-not: |
+          prisma.$MODEL.update({ where: { id: $ID, tenantId: $TENANT_ID, ... }, data: $DATA })
+    message: "WARNING: Prisma mutation modifies a record by primary key 'id' without verifying tenant/user ownership (e.g. userId / tenantId). This can lead to Insecure Direct Object Reference (IDOR) data deletion or tampering."
     languages: [typescript, javascript]
     severity: WARNING
-    message: |
-      Public RPC Exposure: Server Action performs database mutations without
-      session validation at the top of the function.
-    patterns:
-      - pattern-inside: |
-          'use server';
-          ...
-      - pattern-either:
-          - pattern: |
-              export async function $ACTION($PARAMS) {
-                ...
-                await $PRISMA.$MODEL.$METHOD(...);
-                ...
-              }
-          - pattern: |
-              export async function $ACTION($PARAMS) {
-                ...
-                await $DB.$METHOD(...);
-                ...
-              }
-      - pattern-not: |
-          export async function $ACTION($PARAMS) {
-            ...
-            const $SESSION = await $AUTH(...);
-            if (!$SESSION) { ... }
-            ...
-          }

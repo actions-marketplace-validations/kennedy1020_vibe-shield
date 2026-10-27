@@ -7,13 +7,21 @@ on:
     branches: [main]
 
 jobs:
-  verify:
+  build-and-test:
     name: Build & Test Engine
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Source
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Semgrep Engine
+        run: pip install semgrep
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -21,22 +29,11 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: Set up Python (for Semgrep)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Semgrep
-        run: pip install semgrep
-
       - name: Install Dependencies
-        run: npm ci
+        run: npm install
 
-      - name: Typecheck and Build Bundle
+      - name: Build Distribution Files
         run: npm run build
 
-      - name: Verify CLI Help Command
-        run: node dist/cli.js --help
-
-      - name: Run Test Fixture Scan
-        run: node dist/cli.js scan test/fixtures || true
+      - name: Run Test Suite
+        run: npm test

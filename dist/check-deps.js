@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 /**
- * Checks an object of package dependencies against the npm registry.
+ * Checks an object of npm package dependencies against the npm registry.
  * Returns an array of package names that return 404 (hallucinated / slopsquatted).
  */
 export async function auditDependencies(deps) {
@@ -26,23 +26,85 @@ export async function auditDependencies(deps) {
     return missing;
 }
 /**
- * Reads package.json in targetDir and audits all dependencies.
+ * Checks an array of Python package names against the official PyPI registry.
+ * Returns an array of package names that return 404 (hallucinated / unregistered).
  */
-export async function verifyDependencies(targetDir) {
+export async function auditPyPiDependencies(deps) {
+    const missing = [];
+    await Promise.all(deps.map(async (pkg) => {
+        try {
+            const res = await fetch(`https://pypi.org/pypi/${encodeURIComponent(pkg)}/json`, {
+                method: 'HEAD',
+            });
+            if (res.status === 404) {
+                missing.push(pkg);
+            }
+        }
+        catch {
+            // Network timeout / DNS errors don't count as 404s
+        }
+    }));
+    return missing;
+}
+/**
+ * Extracts clean package names from a requirements.txt file,
+ * stripping version specifiers, comments, and environment markers.
+ */
+export function parseRequirementsTxt(content) {
+    return content
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#') && !line.startsWith('-'))
+        .map((line) => {
+        const withoutInlineComment = line.split('#')[0].trim();
+        const match = withoutInlineComment.match(/^([a-zA-Z0-9_\-\.]+)/);
+        return match ? match[1].toLowerCase() : '';
+    })
+        .filter((pkg) => Boolean(pkg));
+}
+/**
+ * Discovers and verifies both package.json (npm) and requirements.txt (PyPI)
+ * in the target directory, excluding any package specified in allowPackages.
+ */
+export async function verifyDependencies(targetDir, allowPackages = []) {
+    const allowSet = new Set(allowPackages.map((p) => p.toLowerCase()));
+    const missingPackages = [];
+    // 1. Audit npm dependencies (package.json)
     const pkgPath = path.resolve(targetDir, 'package.json');
-    if (!fs.existsSync(pkgPath)) {
-        return [];
+    if (fs.existsSync(pkgPath)) {
+        try {
+            const raw = fs.readFileSync(pkgPath, 'utf8');
+            const pkg = JSON.parse(raw);
+            const allDeps = {
+                ...pkg.dependencies,
+                ...pkg.devDependencies,
+            };
+            const filteredDeps = {};
+            for (const [name, version] of Object.entries(allDeps)) {
+                if (!allowSet.has(name.toLowerCase())) {
+                    filteredDeps[name] = version;
+                }
+            }
+            const npmMissing = await auditDependencies(filteredDeps);
+            missingPackages.push(...npmMissing);
+        }
+        catch {
+            // Ignore read / malformed JSON errors
+        }
     }
-    try {
-        const raw = fs.readFileSync(pkgPath, 'utf8');
-        const pkg = JSON.parse(raw);
-        const allDeps = {
-            ...pkg.dependencies,
-            ...pkg.devDependencies,
-        };
-        return await auditDependencies(allDeps);
+    // 2. Audit Python dependencies (requirements.txt)
+    const reqPath = path.resolve(targetDir, 'requirements.txt');
+    if (fs.existsSync(reqPath)) {
+        try {
+            const rawReq = fs.readFileSync(reqPath, 'utf8');
+            const parsedPyDeps = parseRequirementsTxt(rawReq);
+            const filteredPyDeps = parsedPyDeps.filter((pkg) => !allowSet.has(pkg.toLowerCase()));
+            const pypiMissing = await auditPyPiDependencies(filteredPyDeps);
+            missingPackages.push(...pypiMissing);
+        }
+        catch {
+            // Ignore read errors
+        }
     }
-    catch {
-        return [];
-    }
+    return missingPackages;
 }

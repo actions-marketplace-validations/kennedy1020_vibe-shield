@@ -1,0 +1,7 @@
+{
+  "allowPackages": [],
+  "excludePaths": [
+    "test/fixtures/**"
+  ],
+  "rules": {}
+}
