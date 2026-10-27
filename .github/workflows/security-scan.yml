@@ -35,13 +35,13 @@ jobs:
 
       - name: Install Dependencies & Build Action
         run: |
-          npm ci
+          npm install
           npm run build
 
       - name: Run vibe-shield
         uses: ./
         with:
-          target-dir: '.'
+          target-dir: 'src'
           github-token: ${{ secrets.GITHUB_TOKEN }}
           sarif: 'true'
 
