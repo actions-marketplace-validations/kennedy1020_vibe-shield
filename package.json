@@ -19,10 +19,14 @@
     "access": "public"
   },
   "files": [
-    "dist",
+    "dist/index.js",
+    "dist/check-deps.js",
+    "dist/sarif.js",
+    "dist/config.js",
+    "dist/suppress.js",
     "rules",
-    "action.yml",
-    ".semgrepignore"
+    "README.md",
+    "action.yml"
   ],
   "scripts": {
     "build": "tsc && ncc build dist/action.js -o dist -m",
