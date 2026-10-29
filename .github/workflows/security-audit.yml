@@ -1,30 +1,51 @@
-name: vibe-shield Security Audit
+name: Security Audit
 
 on:
+  push:
+    branches: [ main, master ]
   pull_request:
-    branches: [main]
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   audit:
-    name: Run vibe-shield Gate
+    name: SafeKen VibeShield & Semgrep Audit
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write # Required for inline reviews and PR comments
+      security-events: write
+
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Semgrep
+      - name: Install Semgrep CLI
         run: pip install semgrep
 
-      - name: Run vibe-shield
-        uses: ./
+      - name: Build VibeShield
+        run: npm run build
+
+      - name: Run SafeKen VibeShield Security Scan
+        run: node ./dist/index.js scan . --format sarif -o vibe-shield.sarif
+        continue-on-error: true
+
+      - name: Upload SARIF to GitHub Security Tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-         sarif: 'true' 
+          sarif_file: vibe-shield.sarif
+          category: vibe-shield

@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { Command } from 'commander';
 import { verifyDependencies } from './check-deps.js';
 import { mergeFindingsToSarif } from './sarif.js';
@@ -11,6 +11,9 @@ import { isFindingSuppressed } from './suppress.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// 50 MB buffer limit prevents RangeError: stdout maxBuffer length exceeded on large SARIF outputs
+const MAX_STDOUT_BUFFER = 50 * 1024 * 1024;
 
 const program = new Command();
 
@@ -83,17 +86,29 @@ program
       process.exit(1);
     }
 
-    const excludeArgs = (config.excludePaths || [])
-      .map((p) => `--exclude "${p}"`)
-      .join(' ');
+    // Construct array of arguments to prevent shell quote expansion bugs with Windows spaces
+    const semgrepArgs: string[] = [
+      '--config', ruleFile,
+      '--no-git-ignore',
+    ];
 
-    const semgrepArgs = `semgrep --config "${ruleFile}" --no-git-ignore ${excludeArgs} --sarif "${targetDir}"`;
+    if (Array.isArray(config.excludePaths)) {
+      for (const excludePath of config.excludePaths) {
+        if (excludePath) {
+          semgrepArgs.push('--exclude', excludePath);
+        }
+      }
+    }
+
+    semgrepArgs.push('--sarif', targetDir);
 
     let semgrepOutput = '';
     try {
-      semgrepOutput = execSync(semgrepArgs, {
+      semgrepOutput = execFileSync('semgrep', semgrepArgs, {
         encoding: 'utf-8',
+        maxBuffer: MAX_STDOUT_BUFFER,
         stdio: ['pipe', 'pipe', 'pipe'],
+        shell: process.platform === 'win32', // Ensures PATH resolution for Python-installed executables on Windows
       });
     } catch (err: any) {
       semgrepOutput = err.stdout?.toString() || '';
@@ -116,7 +131,7 @@ program
         }
 
         // Inline comment suppression (// vibe-shield-ignore: rule-id)
-        const fileLoc = finding.locations[0]?.physicalLocation;
+        const fileLoc = finding.locations?.[0]?.physicalLocation;
         const uri = fileLoc?.artifactLocation?.uri || '';
         const line = fileLoc?.region?.startLine ?? 1;
 
@@ -143,8 +158,14 @@ program
       const outputFile = options.output || 'vibe-shield.sarif';
       const outputPath = path.resolve(process.cwd(), outputFile);
 
-      fs.writeFileSync(outputPath, JSON.stringify(mergedSarif, null, 2), 'utf-8');
-      console.log(`🛡️  vibe-shield: SARIF report written to ${outputFile}`);
+      try {
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+        fs.writeFileSync(outputPath, JSON.stringify(mergedSarif, null, 2), 'utf-8');
+        console.log(`🛡️  vibe-shield: SARIF report written to ${outputFile}`);
+      } catch (writeErr: any) {
+        console.error(`\n❌ Error writing SARIF report to ${outputPath}: ${writeErr.message}`);
+        process.exit(1);
+      }
 
       process.exit(totalViolations > 0 ? 1 : 0);
     } else {
@@ -156,13 +177,13 @@ program
 
       console.error(`\n🚨 Detected ${totalViolations} security issue(s):\n`);
       for (const item of activeResults) {
-        const fileLoc = item.locations[0]?.physicalLocation;
+        const fileLoc = item.locations?.[0]?.physicalLocation;
         const uri = fileLoc?.artifactLocation?.uri || 'unknown';
         const line = fileLoc?.region?.startLine ?? 1;
         const levelTag = item.level === 'error' ? 'CRITICAL' : 'WARNING';
 
         console.error(`  • ${uri}:${line}`);
-        console.error(`    ${levelTag} [${item.ruleId}]: ${item.message.text}\n`);
+        console.error(`    ${levelTag} [${item.ruleId}]: ${item.message?.text || 'Security finding'}\n`);
       }
 
       process.exit(1);
