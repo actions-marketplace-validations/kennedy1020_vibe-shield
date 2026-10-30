@@ -55,7 +55,7 @@ function printSemgrepMissingMessage(): void {
 program
   .name('vibe-shield')
   .description('Zero-config security auditor and slopsquatting detector for Next.js, Prisma, and Stripe stacks')
-  .version('1.1.5');
+  .version('1.1.6');
 
 program
   .command('scan [target]')
