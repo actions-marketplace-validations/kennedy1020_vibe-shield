@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-const REQUEST_TIMEOUT_MS = 4000;
-const CONCURRENT_BATCH_SIZE = 15;
+const REQUEST_TIMEOUT_MS = 3000;
+const CONCURRENT_BATCH_SIZE = 10;
 const NON_REGISTRY_PROTOCOLS = [
     'workspace:',
     'file:',
@@ -17,19 +17,19 @@ const NON_REGISTRY_PROTOCOLS = [
 ];
 /**
  * Resolves the real registry target for a dependency entry.
- * Handles protocol filtering (workspace:, file:, git:) and npm aliases (npm:pkg@version).
+ * Filters non-registry protocols and unpacks npm aliases (npm:pkg@version).
  */
 export function resolvePackageTarget(name, rawVersion) {
     if (typeof rawVersion !== 'string') {
         return { shouldProbe: false, probeName: name };
     }
     const version = rawVersion.trim();
-    // 1. Skip local files, monorepo workspaces, and direct git repositories
+    // 1. Skip local files, monorepo workspaces, and git repos
     const isNonRegistry = NON_REGISTRY_PROTOCOLS.some((proto) => version.startsWith(proto));
     if (isNonRegistry) {
         return { shouldProbe: false, probeName: name };
     }
-    // 2. Resolve npm aliases (e.g. "old-react": "npm:react@^17.0.0" or "npm:@scope/pkg@1.0.0")
+    // 2. Resolve npm aliases (e.g. "old-react": "npm:react@^17.0.0")
     if (version.startsWith('npm:')) {
         const spec = version.slice(4).trim();
         let targetName;
@@ -55,8 +55,8 @@ export function resolvePackageTarget(name, rawVersion) {
     return { shouldProbe: true, probeName: name };
 }
 /**
- * Executes async tasks in bounded batches to prevent 429 Rate Limits
- * and OS socket exhaustion when analyzing hundreds of dependencies.
+ * Executes async tasks in bounded batches to prevent socket exhaustion
+ * and OS-level network deadlocks on Windows/macOS/Linux.
  */
 async function runInBatches(items, batchSize, task) {
     const results = [];
@@ -68,8 +68,8 @@ async function runInBatches(items, batchSize, task) {
     return results;
 }
 /**
- * Checks an object of npm package dependencies against the npm registry.
- * Returns an array of package names that return 404 (hallucinated / slopsquatted).
+ * Checks npm dependencies against registry.npmjs.org.
+ * Returns an array of package names returning HTTP 404 (hallucinations).
  */
 export async function auditDependencies(deps) {
     const entries = Object.entries(deps || {});
@@ -83,7 +83,7 @@ export async function auditDependencies(deps) {
     const missing = [];
     await runInBatches(toProbe, CONCURRENT_BATCH_SIZE, async ({ reportedName, probeName }) => {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
         try {
             const encodedPkg = probeName.startsWith('@')
                 ? `@${encodeURIComponent(probeName.slice(1))}`
@@ -92,8 +92,8 @@ export async function auditDependencies(deps) {
                 method: 'HEAD',
                 signal: controller.signal,
                 headers: {
-                    'Accept': 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8',
-                    'User-Agent': 'SafeKen-VibeShield/1.1.2',
+                    Accept: 'application/json',
+                    'User-Agent': 'SafeKen-VibeShield/1.1.4',
                 },
             });
             if (res.status === 404) {
@@ -101,29 +101,30 @@ export async function auditDependencies(deps) {
             }
         }
         catch {
-            // Timeouts, AbortError, or DNS errors do not trigger false 404 alerts
+            // Timeouts, AbortErrors, or transient DNS drops fail open rather than hanging
         }
         finally {
-            clearTimeout(timeout);
+            clearTimeout(timer);
         }
     });
     return missing;
 }
 /**
- * Checks an array of Python package names against the official PyPI registry.
- * Returns an array of package names that return 404 (hallucinated / unregistered).
+ * Checks Python package names against pypi.org.
+ * Returns an array of package names returning HTTP 404.
  */
 export async function auditPyPiDependencies(deps) {
     const missing = [];
     await runInBatches(deps, CONCURRENT_BATCH_SIZE, async (pkg) => {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
         try {
             const res = await fetch(`https://pypi.org/pypi/${encodeURIComponent(pkg)}/json`, {
                 method: 'HEAD',
                 signal: controller.signal,
                 headers: {
-                    'User-Agent': 'SafeKen-VibeShield/1.1.2',
+                    Accept: 'application/json',
+                    'User-Agent': 'SafeKen-VibeShield/1.1.4',
                 },
             });
             if (res.status === 404) {
@@ -131,17 +132,17 @@ export async function auditPyPiDependencies(deps) {
             }
         }
         catch {
-            // Network drops / timeouts don't count as 404s
+            // Timeouts or transient network errors fail open
         }
         finally {
-            clearTimeout(timeout);
+            clearTimeout(timer);
         }
     });
     return missing;
 }
 /**
- * Extracts clean package names from a requirements.txt file,
- * stripping version specifiers, comments, extras, and environment markers.
+ * Extracts clean package names from requirements.txt,
+ * stripping inline comments, version constraints, extras, and environment markers.
  */
 export function parseRequirementsTxt(content) {
     return content
@@ -149,23 +150,30 @@ export function parseRequirementsTxt(content) {
         .map((line) => line.trim())
         .filter((line) => line && !line.startsWith('#') && !line.startsWith('-'))
         .map((line) => {
-        // Strip inline comments (#) and environment markers (; sys_platform == 'win32')
         const cleanLine = line.split('#')[0].split(';')[0].trim();
-        // Match base package name, stopping before extras [standard] or version operators (<, =, >, ~)
         const match = cleanLine.match(/^([a-zA-Z0-9_\-\.]+)/);
-        return match ? match[1].toLowerCase() : '';
+        if (!match)
+            return '';
+        // PEP 503 normalization: lowercase and canonicalize runs of [._-]
+        return match[1].toLowerCase().replace(/[-_.]+/g, '-');
     })
         .filter((pkg) => Boolean(pkg));
 }
 /**
- * Discovers and verifies both package.json (npm) and requirements.txt (PyPI)
- * in the target directory, excluding any package specified in allowPackages.
+ * Discovers and audits package.json (npm) and requirements.txt (PyPI).
+ * Automatically resolves files in targetDir or falls back to process.cwd().
  */
 export async function verifyDependencies(targetDir, allowPackages = []) {
     const allowSet = new Set(allowPackages.map((p) => p.toLowerCase()));
     const missingPackages = [];
-    // 1. Audit npm dependencies (package.json)
-    const pkgPath = path.resolve(targetDir, 'package.json');
+    // 1. Audit npm dependencies (locate in targetDir or fallback to cwd)
+    let pkgPath = path.resolve(targetDir, 'package.json');
+    if (!fs.existsSync(pkgPath)) {
+        const cwdPkg = path.resolve(process.cwd(), 'package.json');
+        if (fs.existsSync(cwdPkg)) {
+            pkgPath = cwdPkg;
+        }
+    }
     if (fs.existsSync(pkgPath)) {
         try {
             const raw = fs.readFileSync(pkgPath, 'utf8');
@@ -184,11 +192,17 @@ export async function verifyDependencies(targetDir, allowPackages = []) {
             missingPackages.push(...npmMissing);
         }
         catch {
-            // Ignore read / malformed JSON errors
+            // Ignore read or JSON parse errors
         }
     }
-    // 2. Audit Python dependencies (requirements.txt)
-    const reqPath = path.resolve(targetDir, 'requirements.txt');
+    // 2. Audit Python dependencies (locate in targetDir or fallback to cwd)
+    let reqPath = path.resolve(targetDir, 'requirements.txt');
+    if (!fs.existsSync(reqPath)) {
+        const cwdReq = path.resolve(process.cwd(), 'requirements.txt');
+        if (fs.existsSync(cwdReq)) {
+            reqPath = cwdReq;
+        }
+    }
     if (fs.existsSync(reqPath)) {
         try {
             const rawReq = fs.readFileSync(reqPath, 'utf8');
