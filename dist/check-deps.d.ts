@@ -1,28 +1,28 @@
 /**
  * Resolves the real registry target for a dependency entry.
- * Handles protocol filtering (workspace:, file:, git:) and npm aliases (npm:pkg@version).
+ * Filters non-registry protocols and unpacks npm aliases (npm:pkg@version).
  */
 export declare function resolvePackageTarget(name: string, rawVersion: unknown): {
     shouldProbe: boolean;
     probeName: string;
 };
 /**
- * Checks an object of npm package dependencies against the npm registry.
- * Returns an array of package names that return 404 (hallucinated / slopsquatted).
+ * Checks npm dependencies against registry.npmjs.org.
+ * Returns an array of package names returning HTTP 404 (hallucinations).
  */
 export declare function auditDependencies(deps: Record<string, string>): Promise<string[]>;
 /**
- * Checks an array of Python package names against the official PyPI registry.
- * Returns an array of package names that return 404 (hallucinated / unregistered).
+ * Checks Python package names against pypi.org.
+ * Returns an array of package names returning HTTP 404.
  */
 export declare function auditPyPiDependencies(deps: string[]): Promise<string[]>;
 /**
- * Extracts clean package names from a requirements.txt file,
- * stripping version specifiers, comments, extras, and environment markers.
+ * Extracts clean package names from requirements.txt,
+ * stripping inline comments, version constraints, extras, and environment markers.
  */
 export declare function parseRequirementsTxt(content: string): string[];
 /**
- * Discovers and verifies both package.json (npm) and requirements.txt (PyPI)
- * in the target directory, excluding any package specified in allowPackages.
+ * Discovers and audits package.json (npm) and requirements.txt (PyPI).
+ * Automatically resolves files in targetDir or falls back to process.cwd().
  */
 export declare function verifyDependencies(targetDir: string, allowPackages?: string[]): Promise<string[]>;
